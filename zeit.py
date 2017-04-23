@@ -4,6 +4,7 @@ import os
 import time
 import settings
 import tempfile
+import last_run
 
 import requests
 import smtplib
@@ -39,7 +40,7 @@ class Zeit:
                 )
             finally:
                 self.browser.find_element_by_id('login_email').send_keys(settings.USER)
-                self.browser.find_element_by_id('login_password').send_keys(settings.PASSWORD)
+                self.browser.find_element_by_id('login_pass').send_keys(settings.PASSWORD)
                 self.browser.find_element_by_xpath("//input[@type='submit']").click()
         except Exception as e:
             return False
@@ -48,7 +49,15 @@ class Zeit:
         return True
 
     def get_mobi(self):
-
+        try:
+            self.browser.get(settings.URL2)
+            element = WebDriverWait(self.browser, 10).until(
+                    EC.presence_of_element_located((By.LINK_TEXT, settings.AKTUELLE_AUSGABE_LINK_TEXT))
+            )
+            ausgabe_link = self.browser.find_element_by_link_text(settings.AKTUELLE_AUSGABE_LINK_TEXT).get_attribute("href")
+        finally:
+            self.browser.get(ausgabe_link)
+    
         try:
             element = WebDriverWait(self.browser, 10).until(
                     EC.presence_of_element_located((By.LINK_TEXT, settings.MOBI_LINK_TEXT))
@@ -56,14 +65,20 @@ class Zeit:
         finally:
             mobi_link = self.browser.find_element_by_link_text(settings.MOBI_LINK_TEXT).get_attribute("href")
             print "Downloading: {0}".format(mobi_link)
+            splitted_mobi_link = mobi_link.split("/", 10)
 
-            local_filename = "die_zeit.mobi"
-            r = requests.get(mobi_link, stream=True, auth=HTTPBasicAuth(settings.USER, settings.PASSWORD))
-            with open(local_filename, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=1024):
-                    if chunk: # filter out keep-alive new chunks
-                        f.write(chunk)
-                        f.flush()
+            # local_filename = "die_zeit.mobi"
+            local_filename = splitted_mobi_link[len(splitted_mobi_link)-1]
+            
+            if local_filename != last_run.LAST_ISSUE:
+                    r = requests.get(mobi_link, stream=True, auth=HTTPBasicAuth(settings.USER, settings.PASSWORD))
+                    with open(local_filename, 'wb') as f:
+                        for chunk in r.iter_content(chunk_size=1024):
+                            if chunk: # filter out keep-alive new chunks
+                                f.write(chunk)
+                                f.flush()
+                    f = open('last_run.py', 'w')
+                    f.write(u"LAST_ISSUE = u\"" + local_filename + "\"\n")
         return local_filename
 
 
@@ -83,7 +98,10 @@ class Zeit:
             part.add_header('Content-Disposition', 'attachment; filename="{0}"'.format(os.path.basename(file_name)))
             msg.attach(part)
 
-        smtp = smtplib.SMTP(settings.SMTP_SERVER)
+        smtp = smtplib.SMTP(settings.SMTP_SERVER, settings.SMTP_PORT)
+        smtp.ehlo()
+        smtp.starttls()
+        smtp.ehlo()
         smtp.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
         smtp.sendmail(settings.EMAIL_FROM, settings.EMAIL_TO, msg.as_string())
         smtp.close()
@@ -102,8 +120,11 @@ if __name__ == "__main__":
     zeit = Zeit()
 
     try:
-    	zeit.login()
+    	print "login"
+        zeit.login()
+        print "download"
     	file_name = zeit.get_mobi()
+        print "email"
     	zeit.send_mobi(file_name)
     except Exception as e:
     	print "Error {0}".format(e)
